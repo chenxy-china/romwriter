@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
+#include <sys/time.h>
 
 #define MISSING_FUNC_FMT	"Error: Adapter does not have %s capability\n"
 
@@ -290,46 +291,81 @@ int i2c_write(int file, int address, unsigned char* data, ssize_t bytes)
 {
 
     int nmsgs_sent = 0;
-    struct i2c_msg msgs[1];
+    struct i2c_msg msgs[I2C_RDRW_IOCTL_MAX_MSGS];
     unsigned long len = 0;
-    unsigned int step = 32;
+    unsigned int i,j, step = 32;
 
-    //写入需要写入的地址+值
-    msgs[0].addr = address;     //chip addr
-    msgs[0].flags = 0;          //write data
-    msgs[0].len = 2 + step;     //根据chip手册，地址 2 byte + data 32byte
-    msgs[0].buf = (unsigned char*)malloc(msgs[0].len);
-    if (!msgs[0].buf) {
-        fprintf(stderr, "Error: No memory for buffer\n");
-        return -1;
-    }
+    for (len = 0;len < 65535 ; ) {
+        for(i = 0; i < I2C_RDRW_IOCTL_MAX_MSGS; i++){
+            //写入需要写入的地址+值
+            msgs[i].addr = address;     //chip addr
+            msgs[i].flags = 0;          //write data
+            msgs[i].len = 2 + step;     //根据chip手册，地址 2 byte + data 32byte
+            msgs[i].buf = (unsigned char*)malloc(msgs[0].len);
+            if (!msgs[0].buf) {
+                fprintf(stderr, "Error: No memory for buffer\n");
+                return -1;
+            }
 
-    for (len = 0;len < 65535 ; len+=step) {
-        memset(msgs[0].buf, 0, msgs[0].len);
-        msgs[0].buf[0] = (len >> 8) & 0xff;
-        msgs[0].buf[1] = len & 0xff;
-        // printf("0x%02x 0x%02x \t", msgs[0].buf[0], msgs[0].buf[1]);
-        nmsgs_sent = i2c_dev_write(file,msgs,1);
-        print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
+            memset(msgs[0].buf, 0, msgs[i].len);
+            msgs[i].buf[0] = (len >> 8) & 0xff;
+            msgs[i].buf[1] = len & 0xff;
+            // printf("=== %d 0x%02x 0x%02x \n", i, msgs[i].buf[0], msgs[i].buf[1]);
+
+            len+=step;
+            if(len > 65535){
+                i++;
+                break;
+            }
+        }
+
+        nmsgs_sent = i2c_dev_write(file,msgs,i);
+        //print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
+        for(j=0;j<i;j++){
+            free(msgs[j].buf);  
+        }
         usleep(10000);
     }
 
     
-    for (len = 0;len < bytes ; len+=step) {
-        memset(msgs[0].buf, 0, msgs[0].len);
-        msgs[0].buf[0] = (len >> 8) & 0xff;
-        msgs[0].buf[1] = len & 0xff;
-        if(len + step < bytes){
-            memcpy(msgs[0].buf + 2,data+len, step);
-        }else{
-            memcpy(msgs[0].buf + 2,data+len, bytes-len);
+    for (len = 0;len < bytes ;) {
+        for(i = 0; i < I2C_RDRW_IOCTL_MAX_MSGS; i++){
+            //写入需要写入的地址+值
+            msgs[i].addr = address;     //chip addr
+            msgs[i].flags = 0;          //write data
+            msgs[i].len = 2 + step;     //根据chip手册，地址 2 byte + data 32byte
+            msgs[i].buf = (unsigned char*)malloc( msgs[i].len);
+            if (! msgs[i].buf) {
+                fprintf(stderr, "Error: No memory for buffer\n");
+                return -1;
+            }
+
+            memset( msgs[i].buf, 0,  msgs[i].len);
+            msgs[i].buf[0] = (len >> 8) & 0xff;
+            msgs[i].buf[1] = len & 0xff;
+            // printf("0x%02x 0x%02x \t",  msgs[i].buf[0],  msgs[i].buf[1]);
+
+            //拷贝rom数据
+            if(len + step < bytes){
+                memcpy( msgs[i].buf + 2,data+len, step);
+            }else{
+                memcpy( msgs[i].buf + 2,data+len, bytes-len);
+            }
+
+            len+=step;
+            if(len > bytes){
+                i++;
+                break;
+            }
         }
-        // printf("0x%02x 0x%02x \t", msgs[0].buf[0], msgs[0].buf[1]);
-        nmsgs_sent = i2c_dev_write(file,msgs,1);
+        
+        nmsgs_sent = i2c_dev_write(file,msgs,i);
         print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
+        for(j=0;j<i;j++){
+            free(msgs[j].buf);  
+        }
         usleep(10000);
     }
-    free(msgs[0].buf);    
 
     return 0;
 }
@@ -337,6 +373,10 @@ int i2c_write(int file, int address, unsigned char* data, ssize_t bytes)
 int main(int argc,char** argv)
 {
     printf("program start \n");
+
+    struct timeval start,end;
+    long dif_sec, dif_usec;
+    gettimeofday(&start,NULL);
 
 	char filename[20],romfilename[20];
 	int i2cbus,  address = -1, file, romfile;
@@ -393,5 +433,16 @@ int main(int argc,char** argv)
 
  err_out:
     close(file);
+
+    gettimeofday(&end,NULL);
+    dif_sec = end.tv_sec - start.tv_sec;
+    dif_usec = end.tv_usec - start.tv_usec;
+    
+    if(dif_usec < 0 ){
+        dif_sec = dif_sec -1;
+        dif_usec = dif_usec + 1000000;
+    }
+    printf("running time is %ldsec (%ld us)\n", dif_sec, dif_usec);
+
     exit(1);
 }
