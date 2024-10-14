@@ -176,10 +176,12 @@ int i2c_dev_write(int file, struct i2c_msg *msgs, int nmsgs)
     return nmsgs_sent;
 }
 
-int i2c_read(int file, int address)
+int i2c_read(int file, int address, int outfile)
 {
     int nmsgs_sent = 0;
     struct i2c_msg msgs[2];
+
+    printf("\t rom read to file start \n");
 
     //第1个msg，写入需要读取的地址
     msgs[0].addr = address; //chip addr
@@ -195,7 +197,7 @@ int i2c_read(int file, int address)
     //第2个msg，写入需要读取的长度
     msgs[1].addr = address; //chip addr
     msgs[1].flags = I2C_M_RD;  //read data
-    msgs[1].len = 255;
+    msgs[1].len = 32;
     msgs[1].buf = (unsigned char*)malloc(msgs[1].len);
     if (!msgs[1].buf) {
         fprintf(stderr, "Error: No memory for buffer\n");
@@ -210,8 +212,11 @@ int i2c_read(int file, int address)
 
     print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
 
+    write(outfile,msgs[1].buf ,255);
+
     free(msgs[0].buf);
     free(msgs[1].buf);
+
     return nmsgs_sent;
 }
 
@@ -220,6 +225,8 @@ int i2c_write_read_test(int file, int address)
     int ret = -1, nmsgs_sent = 0;
     struct i2c_msg msgs[3];
     unsigned char testvalue = 0x19;
+
+    printf("\t write read test start \n");
 
     //第1个msg，写入需要写入的地址+值
     msgs[0].addr = address; //chip addr
@@ -305,8 +312,10 @@ int i2c_rom_init(int file, int address)
     unsigned long len = 0;
     unsigned int i,j, step = 32;
 
+    printf("\t rom init start \n");
+
     for (len = 0;len < 65535 ; ) {
-        for(i = 0; i < I2C_RDRW_IOCTL_MAX_MSGS; i++){
+        for(i = 0; i < 1; i++){
             //写入需要写入的地址+值
             msgs[i].addr = address;     //chip addr
             msgs[i].flags = 0;          //write data
@@ -353,8 +362,10 @@ int i2c_write(int file, int address, unsigned char* data, ssize_t bytes)
         return -1;
     }
 
+    printf("\t rom write start \n");
+
     for (len = 0;len < bytes ;) {
-        for(i = 0; i < I2C_RDRW_IOCTL_MAX_MSGS; i++){
+        for(i = 0; i < 1; i++){
             //写入需要写入的地址+值
             msgs[i].addr = address;     //chip addr
             msgs[i].flags = 0;          //write data
@@ -404,7 +415,7 @@ int main(int argc,char** argv)
     gettimeofday(&start,NULL);
 
 	char filename[20],romfilename[20];
-	int i2cbus,  address = -1, file, romfile;
+	int i2cbus,  address = -1, file,  verity = 0;
     unsigned char buffer[65535];
     memset(buffer, 0, sizeof(buffer));
 
@@ -439,30 +450,45 @@ int main(int argc,char** argv)
         }
         goto err_out;
     }
-    strcpy(romfilename,argv[3]);
-    //rom文件存在
-    if (access(romfilename,R_OK) < 0 ){
-        printf("romfile %s not exist\n",romfilename);
-        goto err_out;
+    
+    if(strncmp("verity",argv[3],6) == 0){
+            verity = 1;
+    }else{
+        int romfile;
+
+        strcpy(romfilename,argv[3]);
+        //rom文件存在
+        if (access(romfilename,R_OK) < 0 ){
+            printf("romfile %s not exist\n",romfilename);
+            goto err_out;
+        }
+
+        //打开romfile
+        ssize_t bytes_read;
+        if((romfile = open (romfilename, O_RDONLY)) < 0 ){
+            printf("open rom file %s error\n",romfilename);
+            goto err_out;
+        }
+        //读取到缓冲区
+        bytes_read = read(romfile, buffer, sizeof(buffer));
+        //写缓冲区内容到i2c
+        if(i2c_write(file, address, buffer, bytes_read) < 0){
+            printf("i2c_write rom file error\n");
+        }
+
+        close(romfile);
     }
 
-    // i2c_read(file, address);
-
-
-    //打开romfile
-    ssize_t bytes_read;
-    if((romfile = open (romfilename, O_RDONLY)) < 0 ){
-        printf("open rom file %s error\n",romfilename);
-        goto err_out;
-    }
-    //读取到缓冲区
-    bytes_read = read(romfile, buffer, sizeof(buffer));
-    //写缓冲区内容到i2c
-    if(i2c_write(file, address, buffer, bytes_read) < 0){
-        printf("i2c_write rom file error\n");
+    if(argv[4] && (strncmp("verity",argv[4],6) == 0) ){
+        verity = 1;
     }
 
-    close(romfile);
+    if(verity){
+        int vromfile = open("vrom.bin",O_CREAT|O_WRONLY,0644);
+        //读取rom值到文件
+        i2c_read(file, address, vromfile);
+        close(vromfile);
+    }
 
  err_out:
     close(file);
