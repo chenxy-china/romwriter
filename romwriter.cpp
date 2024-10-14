@@ -217,7 +217,7 @@ int i2c_read(int file, int address)
 
 int i2c_write_read_test(int file, int address) 
 {
-    int nmsgs_sent = 0;
+    int ret = -1, nmsgs_sent = 0;
     struct i2c_msg msgs[3];
     unsigned char testvalue = 0x19;
 
@@ -237,6 +237,11 @@ int i2c_write_read_test(int file, int address)
     msgs[0].buf[3] = 0xff;
 
     nmsgs_sent = i2c_dev_write(file,msgs,1);
+    if(nmsgs_sent < 0){
+         free(msgs[0].buf);
+         return -1;
+    }
+
     print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
 
     //写与读，不能在一个ioctl操作，同时两个ioctl需要间隔
@@ -272,22 +277,27 @@ int i2c_write_read_test(int file, int address)
         msgs[2].buf[0] = 1;  /* number of extra bytes ,length will be first received byte */
 
     nmsgs_sent = i2c_dev_write(file,msgs + 1,2);
-
+    if(nmsgs_sent < 0){
+        free(msgs[0].buf);
+        free(msgs[1].buf);
+        free(msgs[2].buf);
+        return -1;
+    }
     print_msgs(msgs + 1, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
 
     if(msgs[2].buf[1] != testvalue){
-        printf("i2c_write_read_test failed~~~, value 0x%02x\n",msgs[2].buf[1]);
+        printf("i2c_write_read_test value 0x%02x\n",msgs[2].buf[1]);
     }else{
-        printf("i2c_write_read_test sucessed!!!\n");
+        ret = 0;
     }
 
     free(msgs[0].buf);
     free(msgs[1].buf);
     free(msgs[2].buf);
-    return 0;
+    return ret;
 }
 
-int i2c_write(int file, int address, unsigned char* data, ssize_t bytes)
+int i2c_rom_init(int file, int address)
 {
 
     int nmsgs_sent = 0;
@@ -327,7 +337,22 @@ int i2c_write(int file, int address, unsigned char* data, ssize_t bytes)
         usleep(10000);
     }
 
-    
+    return nmsgs_sent;
+}
+
+int i2c_write(int file, int address, unsigned char* data, ssize_t bytes)
+{
+
+    int nmsgs_sent = 0;
+    struct i2c_msg msgs[I2C_RDRW_IOCTL_MAX_MSGS];
+    unsigned long len = 0;
+    unsigned int i,j, step = 32;
+
+    if(i2c_rom_init(file, address) < 0){
+        fprintf(stderr, "Error: i2c_rom_init\n");
+        return -1;
+    }
+
     for (len = 0;len < bytes ;) {
         for(i = 0; i < I2C_RDRW_IOCTL_MAX_MSGS; i++){
             //写入需要写入的地址+值
@@ -367,7 +392,7 @@ int i2c_write(int file, int address, unsigned char* data, ssize_t bytes)
         usleep(10000);
     }
 
-    return 0;
+    return nmsgs_sent;
 }
 
 int main(int argc,char** argv)
@@ -405,7 +430,13 @@ int main(int argc,char** argv)
 
     //读取rom文件名参数
     //printf("rom_filename %s \n",argv[3]);
-    if(!argv[3]){
+    if(!argv[3]) {
+        //如果rom文件名为空，只做测试i2c
+        if( i2c_write_read_test(file, address) < 0) {
+            printf("i2c_write_read_test failed~~~\n");
+        }else{
+            printf("i2c_write_read_test sucessed!!!\n");
+        }
         goto err_out;
     }
     strcpy(romfilename,argv[3]);
@@ -417,18 +448,20 @@ int main(int argc,char** argv)
 
     // i2c_read(file, address);
 
-    // i2c_write_read_test(file, address);
 
     //打开romfile
     ssize_t bytes_read;
     if((romfile = open (romfilename, O_RDONLY)) < 0 ){
-        printf("open rom file  %s error\n",romfilename);
+        printf("open rom file %s error\n",romfilename);
         goto err_out;
     }
     //读取到缓冲区
     bytes_read = read(romfile, buffer, sizeof(buffer));
     //写缓冲区内容到i2c
-    i2c_write(file, address, buffer, bytes_read);
+    if(i2c_write(file, address, buffer, bytes_read) < 0){
+        printf("i2c_write rom file error\n");
+    }
+
     close(romfile);
 
  err_out:
