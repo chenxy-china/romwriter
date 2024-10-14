@@ -176,47 +176,46 @@ int i2c_dev_write(int file, struct i2c_msg *msgs, int nmsgs)
     return nmsgs_sent;
 }
 
-int i2c_read(int file, int address, int outfile)
+int i2c_read(int file, int address, int outfile, unsigned long size)
 {
     int nmsgs_sent = 0;
     struct i2c_msg msgs[2];
+    unsigned long len = 0;
+    unsigned int step = 1024;
+    unsigned long readaddr=0;
+    unsigned char * buff = (unsigned char *)malloc(step);
 
     printf("\t rom read to file start \n");
 
-    //第1个msg，写入需要读取的地址
-    msgs[0].addr = address; //chip addr
-    msgs[0].flags = 0;  //write data
-    msgs[0].len = 2;    //根据chip手册，地址 2 byte
-    msgs[0].buf = (unsigned char*)malloc(msgs[0].len);
-    if (!msgs[0].buf) {
-        fprintf(stderr, "Error: No memory for buffer\n");
-        return -1;
+    for(int i=0; i<size;){
+        //第1个msg，写入需要读取的地址
+        msgs[0].addr = address; //chip addr
+        msgs[0].flags = 0;  //write data
+        msgs[0].len = 2;    //根据chip手册，地址 2 byte
+        msgs[0].buf = (unsigned char*)&readaddr;
+        memset(msgs[0].buf, 0, msgs[0].len);
+        msgs[0].buf[0] = (len >> 8) & 0xff;
+        msgs[0].buf[1] = len & 0xff;
+
+        //第2个msg，写入需要读取的长度
+        msgs[1].addr = address; //chip addr
+        msgs[1].flags = I2C_M_RD;  //read data
+        msgs[1].len = step;
+        msgs[1].buf = (unsigned char*)buff;
+        memset(msgs[1].buf, 0, msgs[1].len);
+        if (msgs[1].flags & I2C_M_RECV_LEN)
+            msgs[1].buf[0] = 1;  /* number of extra bytes ,length will be first received byte */
+
+        nmsgs_sent = i2c_dev_write(file,msgs,2);
+        print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
+
+        write(outfile,msgs[1].buf ,step);
+
+        len+=step;
+        i+=step;
     }
-    memset(msgs[0].buf, 0, msgs[0].len);
 
-    //第2个msg，写入需要读取的长度
-    msgs[1].addr = address; //chip addr
-    msgs[1].flags = I2C_M_RD;  //read data
-    msgs[1].len = 32;
-    msgs[1].buf = (unsigned char*)malloc(msgs[1].len);
-    if (!msgs[1].buf) {
-        fprintf(stderr, "Error: No memory for buffer\n");
-        free(msgs[0].buf);
-        return -1;
-    }
-    memset(msgs[1].buf, 0, msgs[1].len);
-    if (msgs[1].flags & I2C_M_RECV_LEN)
-        msgs[1].buf[0] = 1;  /* number of extra bytes ,length will be first received byte */
-
-    nmsgs_sent = i2c_dev_write(file,msgs,2);
-
-    print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
-
-    write(outfile,msgs[1].buf ,255);
-
-    free(msgs[0].buf);
-    free(msgs[1].buf);
-
+    free(buff);
     return nmsgs_sent;
 }
 
@@ -415,7 +414,7 @@ int main(int argc,char** argv)
     gettimeofday(&start,NULL);
 
 	char filename[20],romfilename[20];
-	int i2cbus,  address = -1, file,  verity = 0;
+	int i2cbus,  address = -1, file,  verity = 0, vromsize = 0x2000;
     unsigned char buffer[65535];
     memset(buffer, 0, sizeof(buffer));
 
@@ -471,6 +470,7 @@ int main(int argc,char** argv)
         }
         //读取到缓冲区
         bytes_read = read(romfile, buffer, sizeof(buffer));
+        vromsize = bytes_read;
         //写缓冲区内容到i2c
         if(i2c_write(file, address, buffer, bytes_read) < 0){
             printf("i2c_write rom file error\n");
@@ -479,14 +479,26 @@ int main(int argc,char** argv)
         close(romfile);
     }
 
-    if(argv[4] && (strncmp("verity",argv[4],6) == 0) ){
-        verity = 1;
+    if(argv[4]){
+        if((strncmp("verity",argv[4],6) == 0) ){
+            verity = 1;
+        }else{
+            char *arg_ptr = argv[4];
+            char *end;
+            vromsize = strtoul(arg_ptr, &end, 0);
+            if (vromsize > 0xffff || arg_ptr == end) {
+                fprintf(stderr, "Error: Invalid verity data byte\n");
+                goto err_out;
+            }
+        }
     }
 
+    
+
     if(verity){
-        int vromfile = open("vrom.bin",O_CREAT|O_WRONLY,0644);
+        int vromfile = open("vrom.bin",O_CREAT|O_RDWR|O_TRUNC ,0644);
         //读取rom值到文件
-        i2c_read(file, address, vromfile);
+        i2c_read(file, address, vromfile, vromsize);
         close(vromfile);
     }
 
