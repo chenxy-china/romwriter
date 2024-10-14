@@ -13,7 +13,7 @@
 #include <sys/time.h>
 
 #define MISSING_FUNC_FMT	"Error: Adapter does not have %s capability\n"
-
+#define DELAY_TIME 1700     //UNIT microseconds
 int lookup_i2c_bus(const char *i2cbus_arg)
 {
 	unsigned long i2cbus;
@@ -251,7 +251,7 @@ int i2c_write_read_test(int file, int address)
     print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
 
     //写与读，不能在一个ioctl操作，同时两个ioctl需要间隔
-    sleep(1);
+    usleep(DELAY_TIME);
 
     //第2个msg，写入需要读取的地址
     msgs[1].addr = address; //chip addr
@@ -342,7 +342,7 @@ int i2c_rom_init(int file, int address)
         for(j=0;j<i;j++){
             free(msgs[j].buf);  
         }
-        usleep(10000);
+        usleep(DELAY_TIME);
     }
 
     return nmsgs_sent;
@@ -395,11 +395,11 @@ int i2c_write(int file, int address, unsigned char* data, ssize_t bytes)
         }
         
         nmsgs_sent = i2c_dev_write(file,msgs,i);
-        print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
+        //print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
         for(j=0;j<i;j++){
             free(msgs[j].buf);  
         }
-        usleep(10000);
+        usleep(DELAY_TIME);
     }
 
     return nmsgs_sent;
