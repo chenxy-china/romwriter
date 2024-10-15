@@ -434,7 +434,7 @@ int main(int argc,char *argv[])
     long dif_sec, dif_usec;
     gettimeofday(&start,NULL);
 
-	char filename[20],romfilename[20];
+	char filename[20],romfilename[256];
 	int i2cbus,  address = -1, file, clear = 0, verify = 0, vromsize = 8192;
     unsigned char buffer[EEPROM_SIZE];
     memset(buffer, 0, sizeof(buffer));
@@ -507,7 +507,7 @@ int main(int argc,char *argv[])
     }
     
     if(argv[3][0] != '-'){
-        strcpy(romfilename,argv[3]);
+        strncpy(romfilename,argv[3],sizeof(romfilename));
         //rom文件存在
         if (access(romfilename,R_OK) < 0 ){
             printf("romfile %s not exist\n",romfilename);
