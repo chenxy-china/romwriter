@@ -14,6 +14,7 @@
 
 #define MISSING_FUNC_FMT	"Error: Adapter does not have %s capability\n"
 #define DELAY_TIME 1700     //UNIT microseconds
+#define EEPROM_SIZE 8192
 int lookup_i2c_bus(const char *i2cbus_arg)
 {
 	unsigned long i2cbus;
@@ -181,7 +182,7 @@ int i2c_read(int file, int address, int outfile, unsigned long size)
     int nmsgs_sent = 0;
     struct i2c_msg msgs[2];
     unsigned long len = 0;
-    unsigned int step = 1024;
+    unsigned int step = 4096;
     unsigned long readaddr=0;
     unsigned char * buff = (unsigned char *)malloc(step);
 
@@ -207,7 +208,7 @@ int i2c_read(int file, int address, int outfile, unsigned long size)
             msgs[1].buf[0] = 1;  /* number of extra bytes ,length will be first received byte */
 
         nmsgs_sent = i2c_dev_write(file,msgs,2);
-        print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
+        //print_msgs(msgs, nmsgs_sent, PRINT_READ_BUF |  PRINT_HEADER | PRINT_WRITE_BUF);
 
         write(outfile,msgs[1].buf ,step);
 
@@ -313,7 +314,7 @@ int i2c_rom_init(int file, int address)
 
     printf("\t rom init start \n");
 
-    for (len = 0;len < 65535 ; ) {
+    for (len = 0;len < EEPROM_SIZE ; ) {
         for(i = 0; i < 1; i++){
             //写入需要写入的地址+值
             msgs[i].addr = address;     //chip addr
@@ -331,7 +332,7 @@ int i2c_rom_init(int file, int address)
             // printf("=== %d 0x%02x 0x%02x \n", i, msgs[i].buf[0], msgs[i].buf[1]);
 
             len+=step;
-            if(len > 65535){
+            if(len > EEPROM_SIZE){
                 i++;
                 break;
             }
@@ -355,11 +356,6 @@ int i2c_write(int file, int address, unsigned char* data, ssize_t bytes)
     struct i2c_msg msgs[I2C_RDRW_IOCTL_MAX_MSGS];
     unsigned long len = 0;
     unsigned int i,j, step = 32;
-
-    if(i2c_rom_init(file, address) < 0){
-        fprintf(stderr, "Error: i2c_rom_init\n");
-        return -1;
-    }
 
     printf("\t rom write start \n");
 
@@ -405,18 +401,71 @@ int i2c_write(int file, int address, unsigned char* data, ssize_t bytes)
     return nmsgs_sent;
 }
 
-int main(int argc,char** argv)
+static void help(void)
 {
-    printf("program start \n");
+	fprintf(stderr,
+		"Usage: romw I2CBUS ADDRESS [romfilename] [-c] [-v [verify-size]]\n"
+		"  I2CBUS is an integer or an I2C bus name\n"
+		"  ADDRESS is an integer (0x08 - 0x77, or 0x00 - 0x7f if -a is given)\n"
+		"  romfilename is file which your want to write to eeprom \n"
+        "       if romfilename not set, just test i2c read and write\n"
+		"  -c is to clear eeprom data \n"
+		"  -v is read eeprom data and write to vrom.bin file for verify\n"
+		"       verify-size is size which you want read from eeprom\n"
+		"       default size is 8192 bytes, if you set romfilename\n"
+		"       default size is romfile size\n"
+        "  Example (i2c-3, address 0x57 read and write test\n"
+        "  # romw 3 0x57 \n"
+        "  Example (same EEPROM, write rom file rom.bin to with verify\n"
+        "  # romw 3 0x57 rom.bin -v \n"
+        "  Example (same EEPROM, read rom data with size 4k to file vrom.bin\n"
+        "  # romw 3 0x57 -v 4096 \n");
+}
 
+int main(int argc,char *argv[])
+{
+    //printf("program start \n");
+
+    if(argc < 3){
+        help();
+        exit(1);
+    }
     struct timeval start,end;
     long dif_sec, dif_usec;
     gettimeofday(&start,NULL);
 
 	char filename[20],romfilename[20];
-	int i2cbus,  address = -1, file,  verity = 0, vromsize = 0x2000;
-    unsigned char buffer[65535];
+	int i2cbus,  address = -1, file, clear = 0, verify = 0, vromsize = 8192;
+    unsigned char buffer[EEPROM_SIZE];
     memset(buffer, 0, sizeof(buffer));
+
+    int arg_idx = 1;
+    char *arg_ptr;
+    char *ptr_end;
+	/* handle (optional) arg_idx first */
+	while (arg_idx < argc) {
+        if(argv[arg_idx][0] == '-'){
+            switch (argv[arg_idx][1]) {
+            case 'c': clear = 1; break;
+            case 'v': 
+                verify = 1; 
+                arg_ptr = argv[arg_idx + 1];
+                if(arg_ptr && arg_ptr[0] != '-'){
+                    vromsize = strtoul(arg_ptr, &ptr_end, 0);
+                    if (vromsize > 0xffff || arg_ptr == ptr_end) {
+                        fprintf(stderr, "Error: Invalid verify data byte \n");
+                    }
+                }
+                break;
+            default:
+                fprintf(stderr, "Error: Unsupported option \"%s\"!\n",
+                    argv[arg_idx]);
+                help();
+                exit(1);
+            }
+        }
+		arg_idx++;
+	}
 
     //查找i2c-n
     //printf("i2c %s \n",argv[1]);
@@ -438,6 +487,13 @@ int main(int argc,char** argv)
         goto err_out;
     }
 
+    if(clear == 1){
+        if(i2c_rom_init(file, address) < 0){
+            fprintf(stderr, "Error: i2c_rom_init\n");
+            goto err_out;
+        }
+    }
+
     //读取rom文件名参数
     //printf("rom_filename %s \n",argv[3]);
     if(!argv[3]) {
@@ -450,11 +506,7 @@ int main(int argc,char** argv)
         goto err_out;
     }
     
-    if(strncmp("verity",argv[3],6) == 0){
-            verity = 1;
-    }else{
-        int romfile;
-
+    if(argv[3][0] != '-'){
         strcpy(romfilename,argv[3]);
         //rom文件存在
         if (access(romfilename,R_OK) < 0 ){
@@ -463,6 +515,7 @@ int main(int argc,char** argv)
         }
 
         //打开romfile
+        int romfile;
         ssize_t bytes_read;
         if((romfile = open (romfilename, O_RDONLY)) < 0 ){
             printf("open rom file %s error\n",romfilename);
@@ -475,27 +528,10 @@ int main(int argc,char** argv)
         if(i2c_write(file, address, buffer, bytes_read) < 0){
             printf("i2c_write rom file error\n");
         }
-
         close(romfile);
     }
 
-    if(argv[4]){
-        if((strncmp("verity",argv[4],6) == 0) ){
-            verity = 1;
-        }else{
-            char *arg_ptr = argv[4];
-            char *end;
-            vromsize = strtoul(arg_ptr, &end, 0);
-            if (vromsize > 0xffff || arg_ptr == end) {
-                fprintf(stderr, "Error: Invalid verity data byte\n");
-                goto err_out;
-            }
-        }
-    }
-
-    
-
-    if(verity){
+    if(verify){
         int vromfile = open("vrom.bin",O_CREAT|O_RDWR|O_TRUNC ,0644);
         //读取rom值到文件
         i2c_read(file, address, vromfile, vromsize);
